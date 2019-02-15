@@ -142,7 +142,7 @@ func (d *DefaultTransmission) processResponses(ctx context.Context) {
 				}
 				d.Logger.WithFields(map[string]interface{}{
 					"status_code": r.StatusCode,
-					"error":       r.Err.Error(),
+					"error":       r.Err,
 					"api_host":    apiHost,
 					"dataset":     dataset,
 				}).Errorf("non-20x response when sending event")
