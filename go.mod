@@ -35,7 +35,7 @@ require (
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/spf13/viper v1.7.0
 	github.com/stretchr/testify v1.4.0
-	github.com/vmihailenco/msgpack v4.0.4+incompatible // indirect
+	github.com/vmihailenco/msgpack v4.0.4+incompatible
 	golang.org/x/sys v0.0.0-20200722175500-76b94024e4b6 // indirect
 	golang.org/x/text v0.3.3 // indirect
 	google.golang.org/appengine v1.6.5 // indirect

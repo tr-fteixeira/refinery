@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math"
 	"net/http"
 	"strconv"
@@ -14,6 +14,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/klauspost/compress/zstd"
+	"github.com/vmihailenco/msgpack"
 
 	"github.com/honeycombio/samproxy/collect"
 	"github.com/honeycombio/samproxy/config"
@@ -157,12 +158,13 @@ func (r *Router) event(w http.ResponseWriter, req *http.Request) {
 	reqID := req.Context().Value(types.RequestIDContextKey{})
 	logger := r.iopLogger.WithField("request_id", reqID)
 
-	reqBod, _ := ioutil.ReadAll(req.Body)
 	var trEv eventWithTraceID
+
 	// pull out just the trace ID for use in routing
-	err := json.Unmarshal(reqBod, &trEv)
+	buf, err := r.decodeContent(req, &trEv)
+
 	if err != nil {
-		logger.WithField("error", err.Error()).WithField("request.url", req.URL).WithField("json_body", string(reqBod)).Debugf("error parsing json")
+		logger.WithField("error", err.Error()).WithField("request.url", req.URL).Debugf("error parsing json")
 		r.handlerReturnWithError(w, ErrJSONFailed, err)
 		return
 	}
@@ -170,7 +172,7 @@ func (r *Router) event(w http.ResponseWriter, req *http.Request) {
 	// not part of a trace. send along upstream
 	if trEv.TraceID == "" {
 		r.Metrics.IncrementCounter(r.incomingOrPeer + "_router_event")
-		ev, err := r.requestToEvent(req, reqBod)
+		ev, err := r.requestToEvent(req, buf)
 		if err != nil {
 			r.handlerReturnWithError(w, ErrReqToEvent, err)
 			return
@@ -191,7 +193,7 @@ func (r *Router) event(w http.ResponseWriter, req *http.Request) {
 	if !targetShard.Equals(r.Sharder.MyShard()) {
 		// it's not for us; send to the peer
 		r.Metrics.IncrementCounter(r.incomingOrPeer + "_router_peer")
-		ev, err := r.requestToEvent(req, reqBod)
+		ev, err := r.requestToEvent(req, buf)
 		if err != nil {
 			r.handlerReturnWithError(w, ErrReqToEvent, err)
 			return
@@ -209,7 +211,7 @@ func (r *Router) event(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	// we're supposed to handle it
-	ev, err := r.requestToEvent(req, reqBod)
+	ev, err := r.requestToEvent(req, buf)
 	if err != nil {
 		r.handlerReturnWithError(w, ErrReqToEvent, err)
 		return
@@ -255,7 +257,7 @@ func (ev *eventWithTraceID) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (r *Router) requestToEvent(req *http.Request, reqBod []byte) (*types.Event, error) {
+func (r *Router) requestToEvent(req *http.Request, buf *bytes.Buffer) (*types.Event, error) {
 	// get necessary bits out of the incoming event
 	apiKey := req.Header.Get(types.APIKeyHeader)
 	if apiKey == "" {
@@ -274,7 +276,8 @@ func (r *Router) requestToEvent(req *http.Request, reqBod []byte) (*types.Event,
 		return nil, err
 	}
 	data := map[string]interface{}{}
-	err = json.Unmarshal(reqBod, &data)
+	d := json.NewDecoder(buf)
+	err = d.Decode(&data)
 	if err != nil {
 		return nil, err
 	}
@@ -297,23 +300,13 @@ func (r *Router) batch(w http.ResponseWriter, req *http.Request) {
 	reqID := req.Context().Value(types.RequestIDContextKey{})
 	logger := r.iopLogger.WithField("request_id", reqID)
 
-	bodyReader, err := r.getMaybeCompressedBody(req)
-	if err != nil {
-		r.handlerReturnWithError(w, ErrPostBody, err)
-		return
-	}
-
-	reqBod, err := ioutil.ReadAll(bodyReader)
-	if err != nil {
-		r.handlerReturnWithError(w, ErrPostBody, err)
-		return
-	}
-
 	batchedEvents := make([]batchedEvent, 0)
 	batchedResponses := make([]*BatchResponse, 0)
-	err = json.Unmarshal(reqBod, &batchedEvents)
+
+	_, err := r.decodeContent(req, &batchedEvents)
+
 	if err != nil {
-		logger.WithField("error", err.Error()).WithField("request.url", req.URL).WithField("json_body", string(reqBod)).Debugf("error parsing json")
+		logger.WithField("error", err.Error()).WithField("request.url", req.URL).Debugf("error parsing json")
 		r.handlerReturnWithError(w, ErrJSONFailed, err)
 		return
 	}
@@ -423,44 +416,6 @@ func (r *Router) batch(w http.ResponseWriter, req *http.Request) {
 	w.Write(response)
 }
 
-func (r *Router) getMaybeCompressedBody(req *http.Request) (io.Reader, error) {
-	var reader io.Reader
-	switch req.Header.Get("Content-Encoding") {
-	case "gzip":
-		gzipReader, err := gzip.NewReader(req.Body)
-		if err != nil {
-			return nil, err
-		}
-		defer gzipReader.Close()
-
-		buf := &bytes.Buffer{}
-		if _, err := io.Copy(buf, gzipReader); err != nil {
-			return nil, err
-		}
-		reader = buf
-	case "zstd":
-		zReader := <-r.zstdDecoders
-		defer func(zReader *zstd.Decoder) {
-			zReader.Reset(nil)
-			r.zstdDecoders <- zReader
-		}(zReader)
-
-		err := zReader.Reset(req.Body)
-		if err != nil {
-			return nil, err
-		}
-		buf := &bytes.Buffer{}
-		if _, err := io.Copy(buf, zReader); err != nil {
-			return nil, err
-		}
-
-		reader = buf
-	default:
-		reader = req.Body
-	}
-	return reader, nil
-}
-
 func (r *Router) batchedEventToEvent(req *http.Request, bev batchedEvent) (*types.Event, error) {
 	apiKey := req.Header.Get(types.APIKeyHeader)
 	if apiKey == "" {
@@ -556,4 +511,45 @@ func makeDecoders(num int) (chan *zstd.Decoder, error) {
 		zstdDecoders <- zReader
 	}
 	return zstdDecoders, nil
+}
+
+func (r *Router) decodeContent(req *http.Request, v interface{}) (*bytes.Buffer, error) {
+	var buf bytes.Buffer
+	reader := io.TeeReader(req.Body, &buf)
+
+	switch req.Header.Get("Content-Encoding") {
+	case "gzip":
+		gz, err := gzip.NewReader(req.Body)
+		if err != nil {
+			return nil, err
+		}
+		defer gz.Close()
+		reader = gz
+	case "zstd":
+		z := <-r.zstdDecoders
+		defer func(z *zstd.Decoder) {
+			z.Reset(nil)
+			r.zstdDecoders <- z
+		}(z)
+		err := z.Reset(req.Body)
+		if err != nil {
+			return nil, err
+		}
+		reader = z
+	default:
+		reader = req.Body
+	}
+
+	switch req.Header.Get("Content-Type") {
+	case "application/x-msgpack", "application/msgpack":
+		d := msgpack.NewDecoder(reader)
+		err := d.Decode(v)
+		return &buf, err
+	case "application/json":
+		d := json.NewDecoder(reader)
+		err := d.Decode(v)
+		return &buf, err
+	}
+
+	return nil, errors.New("Unable to decode body")
 }
