@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/honeycombio/samproxy/config"
+	"github.com/honeycombio/samproxy/internal/peer"
 	"github.com/honeycombio/samproxy/logger"
 	"github.com/stretchr/testify/assert"
 )
@@ -22,10 +23,14 @@ func TestWhichShard(t *testing.T) {
 	config := &config.MockConfig{
 		GetPeerListenAddrVal: selfAddr,
 		GetPeersVal:          peers,
+		PeerManagementType:   "file",
 	}
+	filePeers, err := peer.NewPeers(config)
+	assert.Equal(t, nil, err)
 	sharder := DeterministicSharder{
 		Config: config,
 		Logger: &logger.NullLogger{},
+		Peers:  filePeers,
 	}
 
 	assert.NoError(t, sharder.Start(),
