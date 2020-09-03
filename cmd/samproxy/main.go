@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"time"
 
 	libhoney "github.com/honeycombio/libhoney-go"
@@ -40,6 +41,7 @@ type Options struct {
 }
 
 func main() {
+	runtime.SetBlockProfileRate(2)
 	var opts Options
 	flagParser := flag.NewParser(&opts, flag.Default)
 	if extraArgs, err := flagParser.Parse(); err != nil || len(extraArgs) != 0 {
