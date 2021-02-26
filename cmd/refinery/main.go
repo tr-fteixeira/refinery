@@ -200,7 +200,7 @@ func main() {
 
 	defer startstop.Stop(g.Objects(), ststLogger)
 	if err := startstop.Start(g.Objects(), ststLogger); err != nil {
-		fmt.Printf("failed to start injected dependencies. error: %+v\n", err)
+		fmt.Fprintf(os.Stderr, "failed to start injected dependencies. error: %+v\n", err)
 		os.Exit(1)
 	}
 

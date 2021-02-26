@@ -152,7 +152,7 @@ workflows:
             - build
           filters:
             tags:
-              only: /.*/
+              only: /^v.*/
             branches:
               # Forked pull requests have CIRCLE_BRANCH set to pull/XXX
               ignore: /pull\/[0-9]+/
