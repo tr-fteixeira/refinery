@@ -82,7 +82,7 @@ func newRedisPeers(c config.Config) (Peers, error) {
 	}
 
 	// register myself once
-	err = peers.store.Register(context.TODO(), address, peerEntryTimeout)
+	err = peers.store.Register(context.TODO(), "http://foobar:8081", peerEntryTimeout)
 	if err != nil {
 		logrus.WithError(err).Errorf("failed to register self with peer store")
 		return nil, err
